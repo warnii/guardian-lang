@@ -1,0 +1,89 @@
+app GuardianDemo
+
+    # ── Basic output ─────────────────────────────────
+    say "Guardian Programming Language v1.0"
+    say "Secure by Design. Safe by Default."
+    say ""
+
+    # ── Variables & arithmetic ────────────────────────
+    set x to 10
+    set y to 3
+    say "x + y = " + (x + y)
+    say "x * y = " + (x * y)
+    say "x ** y = " + (x ** y)
+    say ""
+
+    # ── Natural comparisons ───────────────────────────
+    if x is greater than y
+        say "x is greater than y"
+    otherwise
+        say "y is greater than x"
+
+    # ── FizzBuzz ──────────────────────────────────────
+    say ""
+    say "FizzBuzz (1 to 15):"
+    set i to 1
+    repeat while i is at most 15
+        if i % 3 == 0 and i % 5 == 0
+            say "  FizzBuzz"
+        otherwise if i % 3 == 0
+            say "  Fizz"
+        otherwise if i % 5 == 0
+            say "  Buzz"
+        otherwise
+            say "  " + i
+        set i to i + 1
+
+    # ── Functions ─────────────────────────────────────
+    say ""
+    define greet for name
+        give back "Hello, " + name + "!"
+
+    say greet("Guardian")
+    say greet("Hoysal")
+
+    # ── Recursion ─────────────────────────────────────
+    define factorial for n
+        if n is at most 1
+            give back 1
+        give back n * factorial(n - 1)
+
+    say ""
+    say "5! = " + factorial(5)
+    say "8! = " + factorial(8)
+
+    # ── Lists ─────────────────────────────────────────
+    say ""
+    set fruits to list("mango", "apple", "banana", "grape")
+    say "Fruits:"
+    for each fruit in fruits
+        say "  " + fruit
+
+    # ── String built-ins ──────────────────────────────
+    say ""
+    set lang to "guardian"
+    say upper(lang)
+    say length(lang)
+    say contains(lang, "guard")
+
+    # ── Grade calculator ──────────────────────────────
+    say ""
+    say "Grade Report:"
+    define grade for score
+        if score is at least 90
+            give back "A"
+        otherwise if score is at least 80
+            give back "B"
+        otherwise if score is at least 70
+            give back "C"
+        otherwise if score is at least 60
+            give back "D"
+        otherwise
+            give back "F"
+
+    set scores to list(95, 82, 71, 55, 60)
+    for each s in scores
+        say "  " + s + " → " + grade(s)
+
+    say ""
+    say "Done."

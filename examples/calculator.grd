@@ -1,0 +1,30 @@
+app Calculator
+
+    say "=== Guardian Calculator ==="
+    say "Operations: + - * / ** %"
+    say ""
+
+    define calculate for a, op, b
+        if op is "+"
+            give back a + b
+        otherwise if op is "-"
+            give back a - b
+        otherwise if op is "*"
+            give back a * b
+        otherwise if op is "/"
+            if b is 0
+                give back "Error: division by zero"
+            give back a / b
+        otherwise if op is "**"
+            give back a ** b
+        otherwise if op is "%"
+            give back a % b
+        otherwise
+            give back "Unknown operator"
+
+    set a  to number(ask "First number:  ")
+    set op to ask "Operator (+,-,*,/,**,%): "
+    set b  to number(ask "Second number: ")
+
+    set result to calculate(a, op, b)
+    say "{a} {op} {b} = {result}"

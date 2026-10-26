@@ -1,0 +1,5 @@
+app UnsafeDemo
+    set password to "hunter2"
+    set user to ask "Username: "
+    db.query("SELECT * FROM users WHERE name = " + user)
+    say 10 / 0

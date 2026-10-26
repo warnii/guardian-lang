@@ -1,0 +1,32 @@
+app TodoList
+
+    set todos to list()
+    set running to true
+
+    say "=== Guardian Todo List ==="
+    say "Commands: add, done, list, quit"
+    say ""
+
+    repeat while running
+        set cmd to ask "> "
+
+        if cmd is "add"
+            set task to ask "Task: "
+            set todos to add_to(todos, task)
+            say "Added: {task}"
+
+        otherwise if cmd is "list"
+            if length(todos) is 0
+                say "No tasks yet."
+            otherwise
+                set i to 1
+                for each task in todos
+                    say "  {i}. {task}"
+                    set i to i + 1
+
+        otherwise if cmd is "quit"
+            set running to false
+            say "Goodbye!"
+
+        otherwise
+            say "Unknown command. Try: add, list, quit"

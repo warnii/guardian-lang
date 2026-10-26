@@ -19,28 +19,13 @@ app GuardianDemo
     otherwise
         say "y is greater than x"
 
-    # ── FizzBuzz ──────────────────────────────────────
-    say ""
-    say "FizzBuzz (1 to 15):"
-    set i to 1
-    repeat while i is at most 15
-        if i % 3 == 0 and i % 5 == 0
-            say "  FizzBuzz"
-        otherwise if i % 3 == 0
-            say "  Fizz"
-        otherwise if i % 5 == 0
-            say "  Buzz"
-        otherwise
-            say "  " + i
-        set i to i + 1
-
     # ── Functions ─────────────────────────────────────
     say ""
     define greet for name
         give back "Hello, " + name + "!"
 
     say greet("Guardian")
-    say greet("Hoysal")
+    say greet("Warnii")
 
     # ── Recursion ─────────────────────────────────────
     define factorial for n
@@ -66,24 +51,3 @@ app GuardianDemo
     say length(lang)
     say contains(lang, "guard")
 
-    # ── Grade calculator ──────────────────────────────
-    say ""
-    say "Grade Report:"
-    define grade for score
-        if score is at least 90
-            give back "A"
-        otherwise if score is at least 80
-            give back "B"
-        otherwise if score is at least 70
-            give back "C"
-        otherwise if score is at least 60
-            give back "D"
-        otherwise
-            give back "F"
-
-    set scores to list(95, 82, 71, 55, 60)
-    for each s in scores
-        say "  " + s + " → " + grade(s)
-
-    say ""
-    say "Done."

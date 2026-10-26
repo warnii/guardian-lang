@@ -35,8 +35,7 @@ guardian run main.grd
 guardian check main.grd     # security scan only
 guardian repl               # interactive shell
 ```
-Name your files `*.grd`. Open the folder in VS Code; set the language mode to
-Python or Plain Text for now (a .grd highlighter is not built yet).
+Name your files `*.grd`. Open the folder in VS Code;
 
 
 ## Troubleshooting

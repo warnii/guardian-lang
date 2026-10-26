@@ -38,16 +38,6 @@ guardian repl               # interactive shell
 Name your files `*.grd`. Open the folder in VS Code; set the language mode to
 Python or Plain Text for now (a .grd highlighter is not built yet).
 
-## 5. Put it on GitHub (portfolio)
-```
-cd ~/guardian
-git init
-git add .
-git commit -m "Guardian language v1.1"
-git branch -M main
-git remote add origin https://github.com/<you>/guardian-lang.git
-git push -u origin main
-```
 
 ## Troubleshooting
 - `guardian` not found → you didn't open a NEW terminal after installing.

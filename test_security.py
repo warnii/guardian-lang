@@ -349,6 +349,114 @@ def t30():
         assert "G401" in codes_found
 test("Multiple issues detected in one scan", t30)
 
+# ── Taint tracking: aliases, containers, and function calls ────────────────
+
+def t31():
+    src = '''app T
+    set user to ask "Input: "
+    set alias to user
+    shell("echo " + alias)
+'''
+    assert raises_error(src, "G102")
+test("Taint — assignment alias reaches command sink", t31)
+
+def t32():
+    src = '''app T
+    set user to ask "Input: "
+    set values to {"name": user, "status": "safe"}
+    db.query("SELECT " + values["name"])
+'''
+    assert raises_error(src, "G101")
+test("Taint — tainted dictionary field reaches SQL sink", t32)
+
+def t33():
+    src = '''app T
+    set user to ask "Input: "
+    set values to {"name": user, "status": "safe"}
+    db.query("SELECT " + values["status"])
+'''
+    assert "G101" not in codes(src), f"safe field was falsely flagged: {codes(src)}"
+test("Taint — known-safe dictionary field avoids false positive", t33)
+
+def t34():
+    src = '''app T
+    set user to ask "Input: "
+    set values to list("safe", user)
+    shell("echo " + values[1])
+'''
+    assert raises_error(src, "G102")
+test("Taint — tainted list index reaches command sink", t34)
+
+def t35():
+    src = '''app T
+    set user to ask "Input: "
+    set values to list(user, "safe")
+    shell("echo " + values[1])
+'''
+    assert "G102" not in codes(src), f"safe list index was falsely flagged: {codes(src)}"
+test("Taint — known-safe list index avoids false positive", t35)
+
+def t36():
+    src = '''app T
+    set user to ask "Input: "
+    set values to {"name": "safe"}
+    set values["name"] to user
+    shell("echo " + values["name"])
+'''
+    assert raises_error(src, "G102")
+test("Taint — indexed assignment updates dictionary field taint", t36)
+
+def t37():
+    src = '''app T
+    define run for command
+        shell("echo " + command)
+    set user to ask "Input: "
+    run(user)
+'''
+    assert raises_error(src, "G102")
+test("Taint — tainted function argument reaches sink", t37)
+
+def t38():
+    src = '''app T
+    define identity for value
+        give back value
+    set user to ask "Input: "
+    set alias to identity(user)
+    shell("echo " + alias)
+'''
+    assert raises_error(src, "G102")
+test("Taint — function return preserves input taint", t38)
+
+def t39():
+    src = '''app T
+    define run for command
+        shell("echo " + command)
+    run("ls")
+'''
+    assert "G102" not in codes(src), f"constant function argument was falsely flagged: {codes(src)}"
+test("Taint — constant function argument avoids false positive", t39)
+
+def t40():
+    src = '''app T
+    define execute for command
+        shell("echo " + command)
+    define relay for value
+        execute(value)
+    set user to ask "Input: "
+    relay(user)
+'''
+    assert raises_error(src, "G102")
+test("Taint — taint propagates through nested function calls", t40)
+
+def t41():
+    src = '''app T
+    set raw to ask "Filename: "
+    set alias to raw
+    read_file("data/" + alias)
+'''
+    assert raises_error(src, "G501")
+test("Taint — alias is detected in file path construction", t41)
+
 # ── Summary ───────────────────────────────────────────────────────────────
 
 passed = sum(1 for ok,_ in results if ok)

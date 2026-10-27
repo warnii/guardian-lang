@@ -67,6 +67,12 @@ _SECRET_NAMES   = {'password','passwd','secret','api_key','apikey','token','key'
                    'credentials','private_key','auth','access_token'}
 _FILE_FUNCS     = {'read_file','write_file','append_file','delete_file','lines_of'}
 _UNSAFE_MODULES = {'pickle','marshal','ctypes','subprocess','os.system'}
+# Operations that preserve their input text/data; they are not sanitizers.
+_TAINT_PRESERVING_BUILTINS = {
+    'upper', 'lower', 'trim', 'split', 'join', 'replace', 'repeat_text',
+    'list', 'add_to', 'remove_from', 'first', 'last', 'reverse', 'sort',
+    'unique', 'flat', 'pick', 'shuffle',
+}
 
 
 # ── Analyzer ──────────────────────────────────────────────────────────────
@@ -81,12 +87,57 @@ class SecurityAnalyzer:
     def __init__(self, strict: bool = True):
         self.strict = strict   # if False, ERROR → WARN (demo/learning mode)
         self._issues: list[SecurityIssue] = []
-        self._input_vars: set[str] = set()   # tracks variables from 'ask'
+        self._input_vars: set[str] = set()   # variables carrying untrusted input
+        self._container_items: dict[str, set] = {}  # tainted direct keys/indices
+        self._function_defs: dict[str, FuncDef] = {}
+        self._tainted_params: dict[str, set[int]] = {}
+        self._return_tainted_params: dict[str, set[int]] = {}
 
     def analyze(self, program: Program) -> list[SecurityIssue]:
         self._issues.clear()
         self._input_vars.clear()
+        self._container_items.clear()
+        self._function_defs.clear()
+        self._tainted_params.clear()
+        self._return_tainted_params.clear()
+        self._collect_functions(program.body)
+        self._summarize_function_returns()
         self._scan_block(program.body)
+
+        # Re-scan only functions called with tainted arguments. This keeps an
+        # ordinary constant argument from tainting every use of a parameter.
+        processed: dict[str, frozenset[int]] = {}
+        max_passes = max(1, sum(len(fn.params) for fn in self._function_defs.values()) + 1)
+        for _ in range(max_passes):
+            changed = False
+            for name, fn in self._function_defs.items():
+                indexes = frozenset(self._tainted_params.get(name, set()))
+                if not indexes or processed.get(name) == indexes:
+                    continue
+                saved_vars = set(self._input_vars)
+                saved_items = {key: set(value) for key, value in self._container_items.items()}
+                for index in indexes:
+                    if index < len(fn.params):
+                        self._input_vars.add(fn.params[index])
+                        self._container_items.pop(fn.params[index], None)
+                self._scan_block(fn.body.statements)
+                self._input_vars = saved_vars
+                self._container_items = saved_items
+                processed[name] = indexes
+                changed = True
+            current = {name: frozenset(indexes) for name, indexes in self._tainted_params.items() if indexes}
+            if not changed and all(processed.get(name) == indexes for name, indexes in current.items()):
+                break
+
+        # Function re-scans may revisit existing sinks; emit each finding once.
+        unique = []
+        seen = set()
+        for issue in self._issues:
+            key = (issue.code, issue.level, issue.message, issue.suggestion, issue.line, issue.col)
+            if key not in seen:
+                seen.add(key)
+                unique.append(issue)
+        self._issues = unique
 
         errors = [i for i in self._issues if i.level == "ERROR"]
         if errors and self.strict:
@@ -120,8 +171,24 @@ class SecurityAnalyzer:
             self._scan_block(node.body.statements)
             if node.handler:      self._scan_block(node.handler.statements)
             if node.always_block: self._scan_block(node.always_block.statements)
-        elif isinstance(node, (IndexAssignStmt, MemberAssignStmt, AugAssignStmt)):
+        elif isinstance(node, (IndexAssignStmt, MemberAssignStmt)):
+            if isinstance(node, IndexAssignStmt):
+                self._scan_expr(node.index)
+                key = self._static_key(node.index)
+            else:
+                key = node.member
             self._scan_expr(node.value)
+            items = self._container_items.setdefault(node.obj, set())
+            if self._expr_is_tainted(node.value):
+                items.add(key)
+            elif key is not None and None not in items:
+                items.discard(key)
+                if not items:
+                    self._container_items.pop(node.obj, None)
+        elif isinstance(node, AugAssignStmt):
+            self._scan_expr(node.value)
+            if node.name in self._input_vars or self._expr_is_tainted(node.value):
+                self._input_vars.add(node.name)
         elif isinstance(node, ExprStmt):    self._scan_expr(node.expr)
         elif isinstance(node, IfStmt):      self._check_if(node)
         elif isinstance(node, WhileStmt):   self._check_while(node)
@@ -156,9 +223,33 @@ class SecurityAnalyzer:
         name  = node.name.lower()
         value = node.value
 
-        # Track variables that came from user input (ask)
-        if self._is_input_call(value):
-            self._input_vars.add(node.name)
+        # Track input through aliases and known list/dict elements. Reassigning
+        # a variable to a known-safe value clears its previous taint.
+        if isinstance(value, DictLiteral):
+            tainted_keys = set()
+            for key_node, item_value in value.pairs:
+                if self._expr_is_tainted(item_value):
+                    tainted_keys.add(self._static_key(key_node))
+            self._container_items.pop(node.name, None)
+            self._input_vars.discard(node.name)
+            if tainted_keys:
+                self._container_items[node.name] = tainted_keys
+        elif isinstance(value, CallExpr) and self._callee_name(value.callee) == 'list':
+            tainted_indexes = {index for index, item in enumerate(value.args)
+                               if self._expr_is_tainted(item)}
+            self._container_items.pop(node.name, None)
+            self._input_vars.discard(node.name)
+            if tainted_indexes:
+                self._container_items[node.name] = tainted_indexes
+        elif isinstance(value, Identifier) and value.name in self._container_items:
+            self._container_items[node.name] = set(self._container_items[value.name])
+            self._input_vars.discard(node.name)
+        else:
+            self._container_items.pop(node.name, None)
+            if self._expr_is_tainted(value):
+                self._input_vars.add(node.name)
+            else:
+                self._input_vars.discard(node.name)
 
         # G103 — hardcoded secret
         if name in _SECRET_NAMES and isinstance(value, StringLiteral):
@@ -202,6 +293,13 @@ class SecurityAnalyzer:
         # Resolve the function name and method name (if any)
         fn_name     = self._callee_name(node.callee)
         method_name = self._callee_method(node.callee)
+
+        # Remember which user-defined parameters receive tainted arguments.
+        if fn_name in self._function_defs:
+            indexes = self._tainted_params.setdefault(fn_name, set())
+            for index, arg in enumerate(node.args):
+                if index < len(self._function_defs[fn_name].params) and self._expr_is_tainted(arg):
+                    indexes.add(index)
 
         # G101 — SQL injection
         if method_name in _DB_METHODS:
@@ -326,16 +424,120 @@ class SecurityAnalyzer:
         return False
 
     def _uses_raw_input(self, node: Node) -> bool:
-        """True if node is or contains a variable that came from 'ask'."""
+        """True if untrusted data flows into this expression."""
+        return self._expr_is_tainted(node)
+
+    def _expr_is_tainted(self, node: Node, names=None) -> bool:
+        """Conservative expression-level taint check with direct container keys."""
+        tainted_names = self._input_vars if names is None else names
+        if node is None:
+            return False
         if isinstance(node, Identifier):
-            return node.name in self._input_vars
-        if isinstance(node, CallExpr) and self._is_input_call(node):
-            return True
+            return node.name in tainted_names
+        if isinstance(node, (IntLiteral, FloatLiteral, StringLiteral, BoolLiteral, NullLiteral)):
+            return False
         if isinstance(node, BinOp):
-            return self._uses_raw_input(node.left) or self._uses_raw_input(node.right)
+            return self._expr_is_tainted(node.left, tainted_names) or self._expr_is_tainted(node.right, tainted_names)
+        if isinstance(node, UnaryOp):
+            return self._expr_is_tainted(node.operand, tainted_names)
         if isinstance(node, FString):
-            return any(n in self._input_vars for n in self._identifiers_in(node))
+            return any(name in tainted_names for name in self._identifiers_in(node))
+        if isinstance(node, DictLiteral):
+            return any(self._expr_is_tainted(value, tainted_names) for _, value in node.pairs)
+        if isinstance(node, IndexAccess):
+            if isinstance(node.obj, Identifier):
+                if node.obj.name in tainted_names:
+                    return True
+                tainted_keys = self._container_items.get(node.obj.name, set())
+                key = self._static_key(node.index)
+                return bool(tainted_keys) and (None in tainted_keys or key is None or key in tainted_keys)
+            return self._expr_is_tainted(node.obj, tainted_names)
+        if isinstance(node, MemberAccess):
+            if isinstance(node.obj, Identifier):
+                if node.obj.name in tainted_names:
+                    return True
+                tainted_keys = self._container_items.get(node.obj.name, set())
+                return bool(tainted_keys) and (None in tainted_keys or node.member in tainted_keys)
+            return self._expr_is_tainted(node.obj, tainted_names)
+        if isinstance(node, CallExpr):
+            if self._is_input_call(node):
+                return True
+            fn_name = self._callee_name(node.callee)
+            if fn_name in self._return_tainted_params:
+                return any(index < len(node.args) and self._expr_is_tainted(node.args[index], tainted_names)
+                           for index in self._return_tainted_params[fn_name])
+            if fn_name in _TAINT_PRESERVING_BUILTINS:
+                return any(self._expr_is_tainted(arg, tainted_names) for arg in node.args)
+            return False
         return False
+
+    def _static_key(self, node):
+        """Return a literal list/dict key, or None for a dynamic key."""
+        if isinstance(node, StringLiteral): return node.value
+        if isinstance(node, IntLiteral): return node.value
+        return None
+
+    def _collect_functions(self, stmts: list) -> None:
+        """Index named functions before scanning so callers may precede definitions."""
+        for stmt in stmts:
+            if isinstance(stmt, FuncDef):
+                if stmt.name != '__secure__':
+                    self._function_defs[stmt.name] = stmt
+                    self._collect_functions(stmt.body.statements)
+            elif isinstance(stmt, IfStmt):
+                self._collect_functions(stmt.then_block.statements)
+                if stmt.else_block: self._collect_functions(stmt.else_block.statements)
+            elif isinstance(stmt, (WhileStmt, ForStmt)):
+                self._collect_functions(stmt.body.statements)
+            elif isinstance(stmt, TryStmt):
+                self._collect_functions(stmt.body.statements)
+                if stmt.handler: self._collect_functions(stmt.handler.statements)
+                if stmt.always_block: self._collect_functions(stmt.always_block.statements)
+
+    def _summarize_function_returns(self) -> None:
+        """Find parameters that can reach a function's returned value."""
+        self._return_tainted_params = {name: set() for name in self._function_defs}
+        limit = max(1, sum(len(fn.params) for fn in self._function_defs.values()) + 1)
+        for _ in range(limit):
+            changed = False
+            for name, fn in self._function_defs.items():
+                for index, param in enumerate(fn.params):
+                    if index not in self._return_tainted_params[name] and self._block_returns_tainted(fn.body.statements, {param}):
+                        self._return_tainted_params[name].add(index)
+                        changed = True
+            if not changed: break
+
+    def _block_returns_tainted(self, stmts: list, tainted: set[str]) -> bool:
+        """Follow simple aliases and return expressions for a symbolic parameter."""
+        returns_tainted = False
+        for stmt in stmts:
+            if isinstance(stmt, AssignStmt):
+                if self._expr_is_tainted(stmt.value, tainted): tainted.add(stmt.name)
+                else: tainted.discard(stmt.name)
+            elif isinstance(stmt, AugAssignStmt):
+                if stmt.name in tainted or self._expr_is_tainted(stmt.value, tainted): tainted.add(stmt.name)
+            elif isinstance(stmt, (IndexAssignStmt, MemberAssignStmt)):
+                if self._expr_is_tainted(stmt.value, tainted): tainted.add(stmt.obj)
+            elif isinstance(stmt, ReturnStmt):
+                returns_tainted |= stmt.value is not None and self._expr_is_tainted(stmt.value, tainted)
+            elif isinstance(stmt, IfStmt):
+                left, right = set(tainted), set(tainted)
+                returns_tainted |= self._block_returns_tainted(stmt.then_block.statements, left)
+                if stmt.else_block:
+                    returns_tainted |= self._block_returns_tainted(stmt.else_block.statements, right)
+                tainted.update(left | right)
+            elif isinstance(stmt, (WhileStmt, ForStmt)):
+                nested = set(tainted)
+                if isinstance(stmt, ForStmt) and self._expr_is_tainted(stmt.iterable, tainted): nested.add(stmt.var)
+                returns_tainted |= self._block_returns_tainted(stmt.body.statements, nested)
+                tainted.update(nested)
+            elif isinstance(stmt, TryStmt):
+                for block in (stmt.body, stmt.handler, stmt.always_block):
+                    if block:
+                        nested = set(tainted)
+                        returns_tainted |= self._block_returns_tainted(block.statements, nested)
+                        tainted.update(nested)
+        return returns_tainted
 
     def _is_input_call(self, node: Node) -> bool:
         """True if node is a call to 'ask' or 'input'."""
